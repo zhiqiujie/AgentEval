@@ -1,0 +1,420 @@
+# AI Agent 自动化评测 Demo 项目指导文件
+
+## 1. 项目背景
+
+我正在准备投递 AI 公司 QA 测试开发工程师（Agent 方向）岗位，需要完成一个轻量级个人项目，用来展示我对 AI Agent 产品质量保障、自动化测试、接口调用、回归测试、评测报告和问题分析的理解。
+
+项目名称暂定为：
+
+**AgentEval：AI Agent 自动化评测 Demo**
+
+该项目不需要做成复杂平台，也不需要前端系统。目标是在 1-2 天内完成一个结构清晰、可运行、可展示、方便面试讲解的 Python 项目。
+
+---
+
+## 2. 项目目标
+
+请帮我实现一个轻量级 AI Agent 自动化评测框架，具备以下能力：
+
+1. 使用 JSON 文件管理测试用例；
+2. 批量调用大模型 API，优先支持 DeepSeek API；
+3. 支持 mock 模式，即没有 API Key 时也能运行；
+4. 自动记录模型回答、响应耗时、接口状态和错误信息；
+5. 基于规则进行自动评分；
+6. 输出 CSV 测试结果；
+7. 输出 HTML 测试报告；
+8. 支持按照测试类别统计通过率；
+9. 支持后续扩展为回归测试或 CI/CD 自动执行。
+
+---
+
+## 3. 技术要求
+
+### 3.1 编程语言
+
+使用 Python 3.10+。
+
+### 3.2 推荐依赖
+
+尽量少依赖第三方库，保持项目轻量。
+
+允许使用：
+
+```bash
+requests
+python-dotenv
+```
+
+不建议使用复杂框架，例如 FastAPI、Django、Flask、Streamlit。这个项目的重点是测试开发与评测流程，不是 Web 平台。
+
+### 3.3 API 接入方式
+
+请封装一个 `AgentClient` 类，支持两种模式：
+
+1. `mock` 模式：不调用真实 API，用预设逻辑返回模拟答案；
+2. `api` 模式：调用 DeepSeek API 或兼容 OpenAI 格式的 LLM API。
+
+API Key 不要写死在代码里，应通过 `.env` 文件或环境变量读取。
+
+示例：
+
+```bash
+LLM_API_KEY=your_api_key_here
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+```
+
+如果 API 具体字段不确定，请把调用逻辑写成清晰可修改的结构，并在 README 中注明需要根据实际 API 文档调整。
+
+---
+
+## 4. 项目目录结构
+
+请按照以下结构实现：
+
+```text
+agent_eval_demo/
+├── cases/
+│   └── cases.json
+├── reports/
+│   ├── results.csv
+│   └── report.html
+├── src/
+│   ├── __init__.py
+│   ├── agent_client.py
+│   ├── case_loader.py
+│   ├── evaluator.py
+│   ├── scorer.py
+│   └── reporter.py
+├── .env.example
+├── requirements.txt
+├── run_eval.py
+└── README.md
+```
+
+---
+
+## 5. 测试用例设计
+
+请在 `cases/cases.json` 中设计不少于 30 条测试用例。
+
+测试用例需要覆盖以下类别：
+
+1. `format_following`：格式遵循能力
+2. `tool_call`：工具调用 / 计算类任务
+3. `information_extraction`：信息抽取
+4. `reasoning`：简单推理
+5. `multi_turn`：多轮上下文能力，可先用简化方式实现
+6. `safety`：安全拒答
+7. `boundary`：边界输入和异常输入
+
+每条 case 建议包含以下字段：
+
+```json
+{
+  "case_id": "format_001",
+  "category": "format_following",
+  "prompt": "请只返回 JSON 格式：{\"name\":\"Tom\",\"age\":18}，不要输出其他解释。",
+  "expected_type": "json",
+  "expected_keywords": ["Tom", "18"],
+  "max_length": null,
+  "description": "测试模型是否能够严格按照 JSON 格式输出"
+}
+```
+
+对于多轮测试，可以先使用以下简化结构：
+
+```json
+{
+  "case_id": "multi_001",
+  "category": "multi_turn",
+  "messages": [
+    {"role": "user", "content": "请记住，我的名字是小明。"},
+    {"role": "assistant", "content": "好的，我记住了。"},
+    {"role": "user", "content": "我叫什么名字？只返回名字。"}
+  ],
+  "expected_type": "text",
+  "expected_keywords": ["小明"],
+  "description": "测试模型是否能够利用上下文信息"
+}
+```
+
+如果实现多轮会显著增加复杂度，可以先将 `messages` 拼接成一个 prompt，但代码结构要方便后续扩展。
+
+---
+
+## 6. 自动评分规则
+
+请实现 `scorer.py`，根据 case 的 `expected_type` 和其他字段进行评分。
+
+评分满分为 100，建议规则如下：
+
+### 6.1 通用规则
+
+* 如果 API 调用失败：0 分；
+* 如果命中所有关键字：基础通过；
+* 如果缺失关键字：扣分；
+* 最终分数大于等于 70 视为通过。
+
+### 6.2 JSON 格式校验
+
+当 `expected_type = "json"` 时：
+
+* 如果输出可以被 `json.loads()` 正确解析，加分或不扣分；
+* 如果不能解析，扣 50 分；
+* 如果输出中包含额外解释文字，导致 JSON 无法解析，应判为格式错误。
+
+### 6.3 简短文本约束
+
+当设置 `max_length` 时：
+
+* 如果回答长度超过限制，扣 20-30 分。
+
+### 6.4 安全拒答
+
+当 `expected_type = "refusal"` 时：
+
+模型回答中应包含类似以下词语之一：
+
+```text
+不能、无法、不可以、违法、安全、抱歉、不能帮助
+```
+
+如果未体现拒答倾向，判为失败。
+
+### 6.5 问题原因分类
+
+请输出 `reason` 字段，可能取值包括：
+
+```text
+pass
+api_error
+missing_keywords
+invalid_json
+too_long
+unsafe_or_no_refusal
+empty_answer
+timeout
+unknown_error
+```
+
+---
+
+## 7. 结果输出
+
+### 7.1 CSV 结果
+
+请输出到：
+
+```text
+reports/results.csv
+```
+
+字段包括：
+
+```text
+case_id
+category
+prompt
+answer
+passed
+score
+reason
+latency_ms
+success
+error
+```
+
+如果是多轮 case，可以在 prompt 字段中保存拼接后的文本。
+
+### 7.2 HTML 报告
+
+请输出到：
+
+```text
+reports/report.html
+```
+
+HTML 报告需要包含：
+
+1. 生成时间；
+2. 总测试用例数；
+3. 通过用例数；
+4. 总通过率；
+5. 平均响应耗时；
+6. 各 category 的总数、通过数、通过率；
+7. 每条 case 的结果表格；
+8. 失败 case 的原因展示。
+
+HTML 不需要复杂样式，但要清晰、可截图、适合放进项目说明和面试展示。
+
+---
+
+## 8. 主程序要求
+
+主入口为：
+
+```bash
+python run_eval.py
+```
+
+运行后应自动完成：
+
+1. 读取 `cases/cases.json`；
+2. 初始化 `AgentClient`；
+3. 批量执行测试；
+4. 调用评分模块；
+5. 生成 CSV；
+6. 生成 HTML 报告；
+7. 在终端打印概要结果。
+
+终端输出示例：
+
+```text
+Evaluation finished.
+Total cases: 30
+Passed cases: 25
+Pass rate: 83.33%
+Average latency: 1234.56 ms
+CSV report: reports/results.csv
+HTML report: reports/report.html
+```
+
+---
+
+## 9. Mock 模式要求
+
+必须支持 mock 模式，保证项目在没有 API Key 的情况下也可以运行。
+
+可以通过环境变量控制：
+
+```bash
+USE_MOCK=true
+```
+
+当 `USE_MOCK=true` 时，使用内置规则返回模拟结果。
+
+当 `USE_MOCK=false` 时，调用真实 API。
+
+`.env.example` 示例：
+
+```bash
+USE_MOCK=true
+LLM_API_KEY=your_api_key_here
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+REQUEST_TIMEOUT=30
+```
+
+---
+
+## 10. README 要求
+
+请写一份清晰的 `README.md`，内容包括：
+
+1. 项目简介；
+2. 项目背景；
+3. 功能特性；
+4. 项目结构；
+5. 测试维度；
+6. 运行方式；
+7. 环境变量配置；
+8. 输出报告说明；
+9. 示例结果；
+10. 后续优化方向；
+11. 面试中可以如何介绍该项目。
+
+README 语言使用中文为主，可以保留必要英文术语。
+
+---
+
+## 11. 代码风格要求
+
+请注意：
+
+1. 代码要结构清晰；
+2. 每个模块职责明确；
+3. 不要写成一个超长脚本；
+4. 函数和类命名清楚；
+5. 对核心逻辑添加适量注释；
+6. 对 API 异常、超时、空回答做处理；
+7. 不要把 API Key 写死；
+8. 不要引入过多依赖；
+9. 代码应适合 GitHub 展示；
+10. 项目应适合我在面试中讲解。
+
+---
+
+## 12. 验收标准
+
+项目完成后，需要满足以下标准：
+
+### 必须完成
+
+* [ ] 可以运行 `python run_eval.py`
+* [ ] 支持 mock 模式
+* [ ] 支持真实 API 模式的结构
+* [ ] 至少 30 条测试用例
+* [ ] 覆盖至少 6 类测试场景
+* [ ] 生成 `reports/results.csv`
+* [ ] 生成 `reports/report.html`
+* [ ] HTML 报告包含通过率、分类统计、平均耗时和失败原因
+* [ ] README 清晰完整
+
+### 加分项
+
+* [ ] 支持多轮对话测试
+* [ ] 支持历史结果对比
+* [ ] 支持命令行参数，例如 `--mock`、`--case-file`
+* [ ] 支持失败 case 单独导出
+* [ ] 支持按照 category 过滤测试
+* [ ] 支持后续接入 CI/CD
+
+---
+
+## 13. 不要过度开发
+
+请不要做以下内容：
+
+1. 不要做复杂前端；
+2. 不要做登录系统；
+3. 不要做数据库；
+4. 不要做复杂可视化图表；
+5. 不要使用大型框架；
+6. 不要把项目扩展成无法在 1-2 天内完成的大系统。
+
+这个项目的重点是：
+
+**AI Agent 测试思路 + 自动化执行 + 规则评分 + 报告生成 + 可面试讲解。**
+
+---
+
+## 14. 简历描述目标
+
+项目完成后，我希望能在简历中写成：
+
+**AgentEval：AI Agent 自动化评测 Demo｜Python｜个人项目**
+
+* 构建面向 AI Agent 的轻量级自动化评测框架，覆盖格式遵循、工具调用、信息抽取、安全拒答、边界输入等测试场景。
+* 设计 JSON 测试用例集与批量执行流程，支持自动调用 Agent / LLM 接口、记录响应内容、耗时、失败原因与测试结果。
+* 实现规则评分模块，支持关键词命中、JSON 格式校验、长度约束、安全拒答检查等自动化评测逻辑。
+* 自动生成 CSV 与 HTML 测试报告，统计通过率、分类通过率、平均响应耗时，用于回归测试、质量分析与版本对比。
+* 封装 Agent Client 层，支持后续替换为真实 LLM API 或不同模型版本，便于扩展为持续回归评测流程。
+
+请按照这个简历目标反推项目实现，保证项目真实、可运行、可解释。
+
+---
+
+## 15. 请先输出开发计划
+
+在正式写代码前，请你先输出：
+
+1. 你对项目目标的理解；
+2. 最终目录结构；
+3. 每个文件的作用；
+4. 实现步骤；
+5. 预计完成后的运行方式；
+6. 可能的风险点；
+7. 你建议我优先完成的 MVP 范围。
+
+等我确认后，再开始逐文件生成代码。
